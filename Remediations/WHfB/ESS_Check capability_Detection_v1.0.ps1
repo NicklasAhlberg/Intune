@@ -57,10 +57,10 @@ foreach ($camera in $cameras) {
 
 if ($essCapableDevices) {
     Write-Output "This computer is ESS-capable."
-    #Exit:0
+    Exit:0
 }
 
 else { 
     Write-Output "This computer is not ESS-capable."
-    #Exit:1 
+    Exit:1 
 }
