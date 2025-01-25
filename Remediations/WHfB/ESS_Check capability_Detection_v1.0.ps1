@@ -6,7 +6,7 @@ This script checks if a device is ESS-capable. It checks USB host controllers an
 .EXAMPLE
 Run it manually on a local device or use Intune remediation script to check if a device is ESS-capable.
 .NOTES
-NAME: Check ESS capability_Detection_v1.0.ps1
+NAME: ESS_Check capability_Detection_v1.0.ps1
 .WARRANTY
 THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
 .AUTHOR
