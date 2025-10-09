@@ -18,9 +18,10 @@ $folderPath = "C:\Windows\Temp\WinGet\defaultState"
 
 if (Test-Path $folderPath) {
 
-	Write-Output "Files in $folderPath was detected."; #Exit 1
+	Write-Output "Files in $folderPath was detected."; Exit 1
 }
 
 else {
-	Write-Output "No files found in $folderPath."; #Exit 0
+	Write-Output "No files found in $folderPath."; Exit 0
+
 }
