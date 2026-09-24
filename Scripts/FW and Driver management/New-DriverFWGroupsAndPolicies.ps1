@@ -1,6 +1,6 @@
 ### RE
 
-$version = '2.3.0.0'
+$version = '2.3.1.0'
 
 # Runs as an Azure Automation runbook on the PowerShell 7.4 runtime or later (ForEach-Object
 # -Parallel below is PS7 only). Authenticates with the Automation account's managed identity,
@@ -62,17 +62,30 @@ $lenovoFamilyNames = @{
 # Used so a Family group's membership rule also covers machine types not yet enrolled.
 $lenovoFamilyTypes = @{}
 
-# Writes a timestamped log line to the console; WARN and ERROR also emit to their native PS streams.
-# Uses Write-Host so log messages never pollute the pipeline in functions that return data.
+# Writes a timestamped log line. WARN and ERROR also go to the warning and error streams, which
+# Azure Automation shows on the job's Warnings and Errors tabs.
+# Azure Automation's PowerShell 7 runtime drops Write-Host, so the output stream is the only place
+# ordinary lines show up. Writing to it from inside a function would mix log lines into the data
+# that function returns, so lines are queued in $logQueue instead, and Publish-Log writes them
+# out at top level. Without a queue (functions loaded on their own) lines go to the host.
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $formatted = "[$timestamp] [$Level] $Message"
-    Write-Host $formatted
+    if ($logQueue -is [System.Collections.Concurrent.ConcurrentQueue[string]]) { $logQueue.Enqueue($formatted) }
+    else { Write-Host $formatted }
     switch ($Level) {
         "WARN" { Write-Warning $Message }
         "ERROR" { Write-Error   $Message }
     }
+}
+
+# Writes every queued log line to the output stream, oldest first. Only call it at top level,
+# never inside a function whose output is used as data.
+function Publish-Log {
+    if ($logQueue -isnot [System.Collections.Concurrent.ConcurrentQueue[string]]) { return }
+    $line = $null
+    while ($logQueue.TryDequeue([ref]$line)) { Write-Output $line }
 }
 
 # Downloads Lenovo's public model list and returns a hashtable of machine type -> friendly name.
@@ -490,6 +503,16 @@ function Remove-DriversFWGroups {
     Write-Log "------------------------------------------------------------"
 }
 
+# Log lines wait here until Publish-Log writes them to the job output (see Write-Log).
+# Thread-safe, so the parallel runspaces can add to it too.
+$logQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+
+# If the run fails, publish everything logged so far before the error ends the job
+trap {
+    Publish-Log
+    break
+}
+
 Write-Log "New-DriverFWGroupsAndPolicies.ps1 v$version"
 
 # A value like 'true' or 1 would be read inconsistently across the script, so refuse to start
@@ -510,6 +533,7 @@ if ($singleMachineType) {
     $singleMachineType = $singleMachineType.ToUpper()
     Write-Log "Single machine type mode: $singleMachineType"
 }
+Publish-Log
 
 $token = Get-GraphToken
 if ([string]::IsNullOrWhiteSpace($token)) {
@@ -518,6 +542,7 @@ if ([string]::IsNullOrWhiteSpace($token)) {
 
 # Reusable auth header for all Graph API calls
 $headers = @{ Authorization = "Bearer $token" }
+Publish-Log
 
 if ($limitingGroup) {
     Write-Log "Querying device models from limiting group: $limitingGroup"
@@ -545,10 +570,12 @@ if ($singleMachineType) {
     if ($singleTypeModels.Count -eq 0) {
         $source = if ($limitingGroup) { "the limiting group '$limitingGroup'" } else { 'Intune' }
         Write-Log "No devices with machine type $singleMachineType found in $source - nothing to do." -Level "WARN"
+        Publish-Log
         return
     }
     Write-Log "Machine type $singleMachineType found in model(s): $($singleTypeModels -join ', ')"
 }
+Publish-Log
 
 # The catalog only names Lenovo machine types, so skip the download when nothing would use it
 $hasLenovoModels = @($models | Where-Object { Get-LenovoMachineType -Model $_ }).Count -gt 0
@@ -622,6 +649,7 @@ $unmapped = @($families | Where-Object { $_.DisplayName -match '^Lenovo [0-9A-Z]
 if ($unmapped.Count -gt 0) {
     Write-Log "No friendly name found for $($unmapped.Count) machine type(s): $($unmapped.Key -join ', ')" -Level "WARN"
 }
+Publish-Log
 
 # Pre-fetch all existing driver update policies - the endpoint does not support $filter,
 # so we fetch once here and do a client-side check inside the parallel loop
@@ -660,6 +688,7 @@ $invokeApiDef = ${function:Invoke-ApiWithRetry}.ToString()
 
 $action = if ($whatIf) { 'Planning' } else { 'Creating' }
 Write-Log "$action groups and driver update policies for all discovered families (approval mode: $approval)..."
+Publish-Log
 
 $results = $families | ForEach-Object -Parallel {
     # Rebuild the outer script's functions in this runspace from their text
@@ -668,6 +697,7 @@ $results = $families | ForEach-Object -Parallel {
 
     # Bring outer variables into this scope
     $headers = $using:headers
+    $logQueue = $using:logQueue
     $whatIf = $using:whatIf
     $approval = $using:approval
     $automaticDays = $using:automaticDays
@@ -897,6 +927,9 @@ $results = $families | ForEach-Object -Parallel {
 
 } -ThrottleLimit 10
 
+# The parallel runspaces queued their lines while they ran; publish them now
+Publish-Log
+
 # Aggregate per-model outcome objects into totals for the summary
 $countGroupsCreated = ($results | Where-Object GroupCreated).Count
 $countGroupsSkipped = ($results | Where-Object GroupSkipped).Count
@@ -928,3 +961,4 @@ Write-Log "------------------------------------------------------------"
 if ($whatIf) {
     Write-Log "*** WHATIF MODE - nothing above was written to the tenant ***" -Level "WARN"
 }
+Publish-Log
