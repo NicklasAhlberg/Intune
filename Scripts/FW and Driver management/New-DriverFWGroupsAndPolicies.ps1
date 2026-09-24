@@ -1,5 +1,3 @@
-### RE
-
 $version = '2.3.1.0'
 
 # Runs as an Azure Automation runbook on the PowerShell 7.4 runtime or later (ForEach-Object
